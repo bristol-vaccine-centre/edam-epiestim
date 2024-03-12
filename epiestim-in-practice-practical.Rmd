@@ -52,12 +52,12 @@ We are going to focus only on the first wave up to 1st Sept 2020:
 
 ```{r}
 
-england_cases = readr::read_csv("https://api.coronavirus.data.gov.uk/v2/data?areaType=nation&areaCode=E92000001&metric=newCasesBySpecimenDate&format=csv") %>% 
-  filter(date < "2020-09-01") 
-
-england_cases %>% glimpse()
+# TODO:
+# england_cases = ...?
+# england_cases %>% glimpse()
 
 ```
+
 We will use cases as a proxy for infections. We can quickly plot a timeline with
 `ggplot`
 
@@ -104,18 +104,9 @@ $$mean = \sum{ x \times P(x) }$$
 $$std = \sqrt{ \sum{ (x-mean)^2 \times P(x) }}$$
 
 ```{r}
-si_probability = EpiEstim::discr_si(1:20, si_ganyani$mean_si_estimate, si_ganyani$std_si_estimate)
 
-mean_si = sum(1:20*si_probability)
-sd_si = sqrt(sum((1:20-mean_si)^2*si_probability))
+# TODO:
 
-print(mean_si)
-print(sd_si)
-
-ggplot(tibble(
-  delay = 1:20,
-  probability = si_probability
-), aes(x=delay, y=probability))+geom_bar(stat="identity")
 ```
 
 We don't actually need the SI distribution as EpiEstim does it automatically.
@@ -199,8 +190,8 @@ https://github.com/tomwhite/covid-19-uk-data/tree/b5e3384a4a6cb6bbf3aa292395ccd9
 ```{r}
 
 tom_white_cases = readr::read_csv("https://github.com/tomwhite/covid-19-uk-data/raw/b5e3384a4a6cb6bbf3aa292395ccd90a36771af1/data/covid-19-totals-england.csv")
-
 tom_white_cases %>% glimpse()
+
 ```
 
 As we can see here this was presented as a cumulative case count:
@@ -237,27 +228,7 @@ Dealing with more "real" data:
 
 ```{r}
 
-# The data is not conformant
-if (any(is.na(tom_white_cases$dailyConfirmedCases))) print("missing values found")
-if (any(tom_white_cases$dailyConfirmedCases < 0)) print("negatives found")
-if (any(na.omit(lead(tom_white_cases$Date)-tom_white_cases$Date != 1))) print("missing dates")
-
-# To get EpiEstim to work we will have to fill in missing dates and values, and 
-# ensure the case count is strictly positive.
-tom_white_cases_2 = tom_white_cases %>% 
-  tidyr::complete(
-    Date = tidyr::full_seq(Date,1), fill = list(dailyConfirmedCases = NA)
-  ) %>%
-  mutate(
-    dailyConfirmedCases = ifelse(dailyConfirmedCases<0,NA,dailyConfirmedCases)
-  ) %>% 
-  tidyr::fill(dailyConfirmedCases)
-
-tom_white_cases_2 %>% glimpse()
-
-if (!any(is.na(tom_white_cases_2$dailyConfirmedCases))) print("missing values fixed")
-if (!any(tom_white_cases_2$dailyConfirmedCases < 0)) print("negatives fixed")
-if (!any(na.omit(lead(tom_white_cases_2$Date)-tom_white_cases_2$Date != 1))) print("missing dates fixed")
+# TODO:
 
 ```
 
@@ -268,45 +239,7 @@ for this data and plot it?
 
 ```{r}
 
-window = 7
-t_start_2 = 2:(nrow(tom_white_cases_2)-window)
-t_end_2 = t_start_2 + window
-
-simple_config_2 = EpiEstim::make_config(
-  method = "parametric_si",
-  mean_si = si_ganyani$mean_si_estimate,
-  std_si = si_ganyani$std_si_estimate,
-  mean_prior = 1,
-  std_prior = 1,
-  t_start = t_start_2,
-  t_end = t_end_2
-)
-
-simple_ts_2 = tom_white_cases_2 %>% 
-  select(dates = Date, I = dailyConfirmedCases) %>%
-  arrange(dates)
-
-epiestim_out_2 = estimate_R(simple_ts_2,method = "parametric_si", config=simple_config_2)
-
-plot_data_2 = epiestim_out_2$R %>% 
-  mutate(date = epiestim_out_2$dates[t_end]) %>% 
-  filter(date > "2020-06-01" & date < "2020-08-01")
-
-combined_plot_data = bind_rows(
-  plot_data %>% mutate(type = "retrospective"),
-  plot_data_2 %>% mutate(type = "real time")
-)
-
-ggplot(combined_plot_data)+
-    geom_line(mapping=aes(x=date, y=`Mean(R)`, colour=type))+
-    geom_ribbon(mapping=aes(x=date, ymin=`Quantile.0.25(R)`,ymax=`Quantile.0.75(R)`, fill=type), colour=NA, alpha=0.2)+
-    geom_ribbon(mapping=aes(x=date, ymin=`Quantile.0.025(R)`,ymax=`Quantile.0.975(R)`, fill=type), colour=NA, alpha=0.1)+
-    geom_hline(yintercept = 1, colour="grey50")+
-    geom_vline(xintercept = as.Date("2020-07-12"), colour="grey50")+
-    xlab(NULL)+
-    ylab("Reproduction number")+
-    coord_cartesian(ylim=c(0.75,1.25))
-  
+# TODO:
 
 ```
 
