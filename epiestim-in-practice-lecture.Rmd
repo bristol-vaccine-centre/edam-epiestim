@@ -1,0 +1,690 @@
+---
+title: "Uses and limitations of EpiEstim in practice"
+author: "Rob Challen"
+date: "2024-01-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+here::i_am("epiestim-in-practice-lecture.Rmd")
+library(tidyverse)
+library(patchwork)
+source(here::here("common-setup.R"))
+
+# There is a global flag to disable `roogledocs` in case you want to develop and
+# test offline.
+options('roogledocs.disabled'=FALSE)
+
+# roogledocs stores an authentication token on your local hard drive.
+options("roogledocs.tokenDirectory"="~/.roogledocs")
+
+
+if (!exists("doc")) doc = roogledocs::slides_by_name("BRMSM0070 EDAM Uses and limitations of EpiEstim in practice")
+doc$slideLayouts()
+
+cache = memoise::cache_filesystem("~/tmp/epiestim")
+estimate_R = memoise::memoise(EpiEstim::estimate_R,cache = cache)
+cached_csv = memoise::memoise(readr::read_csv, cache = cache)
+viewer = getOption("viewer")
+
+dims = doc$slideDimensions()
+
+here::i_am("epiestim-in-practice-lecture.Rmd")
+
+```
+
+```{r eval=FALSE}
+doc$updateCitations(here::here("references.bib"))
+```
+
+## BRMSM0070 Epidemic Data Analysis and Modelling
+
+## Set up data
+
+```{r}
+
+
+ukts = cached_csv("https://api.coronavirus.data.gov.uk/v2/data?areaType=nation&areaCode=E92000001&metric=newCasesBySpecimenDate&format=csv")
+si_sample_data = as.matrix(read.table(here::here("input/resampled-truncated-empirical-si-sample.txt")))
+si_sample_data_mean = apply(si_sample_data,MARGIN = 1,FUN=mean)
+
+
+si_lit = readxl::read_xlsx(here::here("input/serial-interval-literature.xlsx")) 
+si_ganyani = si_lit %>% dplyr::filter(label == "Ganyani et al. 2020 (singapore)" & estimate_type == "generation interval")
+
+#FFS
+
+norm_error = function(value, q = c(0.025,0.5,0.975)) {
+  function(params) {
+    mean = params[1]
+    sd = params[2]
+    return(sum((qnorm(q, mean, sd) - value)^2))
+  }
+}
+
+gamma_error = function(value, q = c(0.025,0.5,0.975)) {
+  function(params) {
+    mean = params[1]
+    sd = params[2]
+    return(sum((qgamma(q, shape = mean^2/sd^2, rate = mean/sd^2) - value)^2))
+  }
+}
+
+quantiles_mean = c(
+  si_ganyani$mean_si_estimate_low_ci,
+  si_ganyani$mean_si_estimate,
+  si_ganyani$mean_si_estimate_high_ci)
+
+tmp = stats::optim(par=c(1,1), fn=norm_error(quantiles_mean))
+
+quantiles_si = c(
+  si_ganyani$std_si_estimate_low_ci,
+  si_ganyani$std_si_estimate,
+  si_ganyani$std_si_estimate_high_ci)
+
+tmp2 = stats::optim(par=c(si_ganyani$std_si_estimate, 1), fn=gamma_error(quantiles_si))
+
+si2_ganyani = list(
+  mean_of_mean_si = tmp$par[1],
+  std_of_mean_si = tmp$par[2],
+  min_of_mean_si = si_ganyani$mean_si_estimate_low_ci,
+  max_of_mean_si = si_ganyani$mean_si_estimate_high_ci,
+  mean_of_std_si = tmp2$par[1],
+  std_of_std_si = tmp2$par[2],
+  min_of_std_si = si_ganyani$std_si_estimate_low_ci,
+  max_of_std_si = si_ganyani$std_si_estimate_high_ci
+)
+
+```
+
+# Maths intro
+
+```{r}
+# Poisson distribution slide
+doplot(ggplot2::ggplot()+
+    geom_discrete("\u03BB: 10",dpois(0:90,10))+
+    # ggplot2::annotate("label",x=15, y=0.08,label=",vjust=-0.05,hjust=-0.05, colour="darkred",size=18/ggplot2::.pt)+
+    geom_discrete("\u03BB: 30",dpois(0:90,30))+
+    # ggplot2::annotate("label",x=35, y=0.05,label="\u03BB: 30",vjust=-0.05,hjust=-0.05, colour="darkblue",size=18/ggplot2::.pt)+
+    geom_discrete("\u03BB: 60",dpois(0:90,60))+
+    # ggplot2::annotate("label",x=67, y=0.04,label="\u03BB: 60",vjust=-0.05,hjust=-0.05, colour="darkgreen",size=18/ggplot2::.pt)+
+    ggplot2::xlab(NULL)+
+    ggplot2::ylab("density")+
+    ggplot2::scale_colour_brewer(palette="Dark2",aesthetics = c("fill","colour"),name=NULL)
+)
+```
+
+```{r}
+# Gamma distribution slide
+doplot(ggplot2::ggplot()+
+  geom_gamma("darkblue", 1.5, 1.5*0.2)+
+  geom_gamma("darkred", 1.5, 1.5*0.5)+
+  geom_gamma("darkgreen", 1.5, 1.5*0.9)+
+  #geom_gamma(1.5,1.5*1.01,"darkblue")+
+  ggplot2::coord_cartesian(xlim=c(0,4),ylim=c(0,1.5))+
+  ggplot2::ylab("density")+
+  xlab(NULL)
+)
+
+
+```
+
+
+```{r}
+
+# Conjugate prior slide
+incid = rpois(10,5)
+p1 = ggplot2::ggplot()+geom_incidence(Sys.Date()-1:10, incid, colour="black")+
+  ggplot2::xlab("date")+ggplot2::ylab("count")+xlab(NULL)
+
+p2 = ggplot2::ggplot()+
+  geom_gamma("orange",shape=3,rate=1)+
+  geom_gamma("blue",shape=3+sum(incid),rate=1+length(incid))+
+  ggplot2::coord_cartesian(xlim=c(0,9),ylim=c(0,0.9))+
+  ggplot2::ylab("density")+ggplot2::xlab("\u03BB")+
+  geom_vline(xintercept=5, colour="red")
+
+doplot(p2+p1+patchwork::plot_layout(design=c(area(1,1,20,20),area(2,2,8,8))))
+```
+
+
+```{r}
+
+# Renewal equation slide
+demo = ukts %>% dplyr::filter(date >= as.Date("2020-12-01") & date < as.Date("2020-12-22"))
+demo3 = ukts %>% dplyr::filter(date %in% (as.Date("2020-12-21")-(1:20))) %>%
+  dplyr::mutate(frac = newCasesBySpecimenDate*EpiEstim::discr_si(1:20,5,3))
+demo2 = ukts %>% dplyr::filter(date == as.Date("2020-12-21")) %>%
+  dplyr::mutate(frac = sum(demo3$frac), Rt = newCasesBySpecimenDate/frac)
+demo4 = ukts %>% dplyr::filter(date %in% (as.Date("2020-12-21")+1:6))
+
+p1 = ggplot2::ggplot()+
+  ggplot2::geom_label(mapping = ggplot2::aes(x=demo2$date, y= 50000, label=sprintf("Rₜ %1.2f",demo2$Rt), fill="orange"))+
+  geom_incidence("grey50", demo$date, demo$newCasesBySpecimenDate)+
+  geom_incidence("yellow", demo2$date, demo2$newCasesBySpecimenDate)+
+  geom_incidence("darkgreen", demo3$date, demo3$frac)+
+  geom_incidence("cyan", demo2$date, demo2$frac)+
+  ggplot2::geom_segment(mapping = ggplot2::aes(x=as.Date("2020-12-02"),xend=as.Date("2020-12-21")-1,y=-2500,yend=-2500), colour="darkgreen",arrow = grid::arrow(ends="both"))+
+  ggplot2::xlab(NULL)+
+  ggplot2::ylab("count (I)")
+
+
+p2 = ggplot() + 
+  #geom_gamma(5,3,"red",1)+
+  geom_discrete(EpiEstim::discr_si(0:10,5,3),colour="darkgreen")+
+  #ggplot2::xlab("s")+
+  ylab("\u03C9ₛ")+xlab(NULL)+
+  # ggplot2::annotate("label",x=10, y=0.05,label="mean: 5; sd 3",vjust=-0.05,hjust=-0.05, colour="darkgreen",size=12/ggplot2::.pt)+
+  facet_wrap(~"infectivity profile")
+# geom_discrete(si_sample_data, colour="red")
+
+doplot(p1+p2+patchwork::plot_layout(design=c(area(1,1,20,20),area(2,2,8,8))))
+
+```
+
+
+```{r}
+
+# Cori et al method slide
+demo = ukts %>% dplyr::filter(date >= as.Date("2020-12-01") & date < as.Date("2020-12-22"))
+demo3 = ukts %>% dplyr::filter(date %in% (as.Date("2020-12-21")-(1:20))) %>%
+  dplyr::mutate(frac = newCasesBySpecimenDate*EpiEstim::discr_si(1:20,5,3))
+demo2 = ukts %>% dplyr::filter(date == as.Date("2020-12-21")) %>%
+  dplyr::mutate(frac = sum(demo3$frac), Rt = newCasesBySpecimenDate/frac)
+demo4 = ukts %>% dplyr::filter(date %in% (as.Date("2020-12-21")+1:6))
+
+doplot(ggplot2::ggplot()+
+  ggplot2::geom_label(mapping = ggplot2::aes(x=demo2$date, y= 50000, label=sprintf("Rₜ %1.2f",demo2$Rt), fill="orange"))+
+  geom_incidence("grey50", demo$date, demo$newCasesBySpecimenDate)+
+  geom_incidence("yellow", demo2$date, demo2$newCasesBySpecimenDate)+
+  geom_incidence("darkred",demo4$date, demo4$newCasesBySpecimenDate)+
+  geom_incidence("darkgreen", demo3$date, demo3$frac)+
+  geom_incidence("cyan", demo2$date, demo2$frac)+
+  ggplot2::geom_segment(mapping = ggplot2::aes(x=as.Date("2020-12-27"),xend=as.Date("2020-12-21"),y=-2500,yend=-2500), colour="red",arrow = grid::arrow(ends="both"))+
+  ggplot2::geom_segment(mapping = ggplot2::aes(x=as.Date("2020-12-02"),xend=as.Date("2020-12-21")-1,y=-2500,yend=-2500), colour="darkgreen",arrow = grid::arrow(ends="both"))+
+  ggplot2::xlab(NULL)+
+  ggplot2::ylab("count (I)")
+)
+```
+
+
+# Application: Infectivity profile
+
+
+```{r}
+
+simple_config = EpiEstim::make_config(
+  method = "parametric_si",
+  mean_si = si2_ganyani$mean_of_mean_si,
+  std_si = si2_ganyani$mean_of_std_si,
+  mean_prior = 1,
+  std_prior = 1
+)
+
+simple_ts = ukts %>% dplyr::select(dates = date, I = newCasesBySpecimenDate) %>%
+  dplyr::arrange(dates)
+
+simple_R = estimate_R(simple_ts,method = "parametric_si", config=simple_config)
+
+```
+
+
+```{r}
+
+uncertain_config = EpiEstim::make_config(
+  method = "uncertain_si",
+  mean_si = si2_ganyani$mean_of_mean_si,
+  std_mean_si = si2_ganyani$std_of_mean_si,
+  min_mean_si = si2_ganyani$min_of_mean_si,
+  max_mean_si = si2_ganyani$max_of_mean_si,
+  std_si = si2_ganyani$mean_of_std_si,
+  std_std_si = si2_ganyani$std_of_std_si,
+  min_std_si = si2_ganyani$min_of_std_si,
+  max_std_si = si2_ganyani$max_of_std_si,
+  mean_prior = 1,
+  std_prior = 1
+)
+
+simple_ts = ukts %>% dplyr::select(dates = date, I = newCasesBySpecimenDate) %>%
+  dplyr::arrange(dates)
+
+uncertain_R = estimate_R(simple_ts,method = "uncertain_si", config=uncertain_config)
+```
+
+```{r}
+ggplot()+
+  # geom_rt("red",uncertain_R)+
+  geom_rt("blue",simple_R)+
+  coord_cartesian(ylim=c(0.5,1.75), xlim=as.Date(c("2020-06-01","2021-01-01")))+
+  scale_color_identity(aesthetics=c("fill","colour"))
+
+
+```
+
+## Anomaly
+
+```{r}
+
+plot_dates = as.Date(c("2020-06-21","2020-07-21"))
+anomaly_date = as.Date("2020-07-08")
+original = simple_ts %>% filter(dates==anomaly_date) %>% pull(I)
+
+missing_ts = ukts %>% dplyr::select(dates = date, I = newCasesBySpecimenDate) %>%
+  mutate(I = case_when(
+    dates == anomaly_date ~ I/2,
+    TRUE ~ I
+  )) %>%
+  dplyr::arrange(dates)
+
+missing_R = estimate_R(missing_ts,method = "parametric_si", config=simple_config)
+
+anomaly_ts = ukts %>% dplyr::select(dates = date, I = newCasesBySpecimenDate) %>%
+  mutate(I = case_when(
+    dates == anomaly_date ~ I*1.5,
+    TRUE ~ I
+  )) %>%
+  dplyr::arrange(dates)
+
+anomaly_R = estimate_R(anomaly_ts,method = "parametric_si", config=simple_config)
+
+p1 = ggplot()+
+  geom_incidence("black",simple_ts$dates, simple_ts$I, dates=plot_dates)+
+  geom_errorbar(data = tibble(
+    dates = anomaly_date, I = c(original*0.5,original*1.5), colour = c("red","magenta")
+  ), aes(x=dates,ymin=I,ymax=I,colour=colour), width=1, size=2)
+
+
+p2 = ggplot()+
+  geom_rt("red",missing_R, dates=plot_dates)+
+  geom_rt("black",simple_R, dates=plot_dates)+
+  coord_cartesian(ylim=c(0.8,1.25)) +
+  geom_vline(xintercept = anomaly_date)+
+  facet_wrap(~sprintf("%s: 50%% of original (%d)",format(anomaly_date,"%d %b"), original))
+
+p3 = ggplot()+
+  geom_rt("magenta",anomaly_R, dates=plot_dates)+
+  geom_rt("black",simple_R, dates=plot_dates)+
+  coord_cartesian(ylim=c(0.8,1.25)) +
+  geom_vline(xintercept = anomaly_date)+
+  facet_wrap(~sprintf("%s: 150%% of original (%d)",format(anomaly_date,"%d %b"),original))
+
+doplot(p1+p2+theme(axis.text.x.bottom = element_blank())+p3+patchwork::plot_layout(design = "AABBB\nAACCC"))
+
+```
+
+## Weekends and holidays
+
+```{r}
+
+p1 = ggplot()+
+  geom_incidence("black",simple_ts$dates, simple_ts$I)+
+  coord_cartesian(ylim=c(0,100000), xlim=as.Date(c("2020-12-01","2021-02-01")))+
+  geom_vline(xintercept=as.Date(c("2020-12-25")), colour="blue")+
+  geom_vline(xintercept=as.Date(c("2021-01-01")), colour="blue")+
+  geom_vline(xintercept=as.Date(c("2021-01-04")), colour="red")+
+  scale_x_date(date_breaks = "1 week",date_labels = "%d %b")+
+  theme(axis.text.x.bottom = element_blank())
+
+
+
+p2 = ggplot()+
+  geom_rt("black",uncertain_R)+
+  coord_cartesian(ylim=c(0.5,1.75), xlim=as.Date(c("2020-12-01","2021-02-01")))+
+  geom_vline(xintercept=as.Date(c("2020-12-25")), colour="blue")+
+  geom_vline(xintercept=as.Date(c("2021-01-01")), colour="blue")+
+  geom_vline(xintercept=as.Date(c("2021-01-04")), colour="red")+
+  scale_x_date(date_breaks = "1 week",date_labels = "%d %b")
+
+
+doplot(
+  p1+p2+patchwork::plot_layout(ncol = 1)
+)
+
+```
+
+
+## Serial intervals
+
+```{r}
+
+low_si_config = EpiEstim::make_config(
+  method = "parametric_si",
+  mean_si = si2_ganyani$mean_of_mean_si * 0.75,
+  std_si = si2_ganyani$mean_of_std_si,
+  mean_prior = 1,
+  std_prior = 1
+)
+
+low_si_R = estimate_R(simple_ts,method = "parametric_si", config=low_si_config)
+
+hi_si_config = EpiEstim::make_config(
+  method = "parametric_si",
+  mean_si = si2_ganyani$mean_of_mean_si * 1.25,
+  std_si = si2_ganyani$mean_of_std_si,
+  mean_prior = 1,
+  std_prior = 1
+)
+
+hi_si_R = estimate_R(simple_ts,method = "parametric_si", config=hi_si_config)
+
+peak_2020 = as.Date(c("2020-11-01","2021-03-01"))
+
+p1 = ggplot()+
+  geom_rt("x75%",low_si_R, dates=peak_2020)+
+  geom_rt(sprintf("%1.2f days",si2_ganyani$mean_of_mean_si),simple_R, dates=peak_2020)+
+  geom_rt("x125%",hi_si_R, dates=peak_2020)+
+  coord_cartesian(ylim=c(0.5,1.75))+
+  scale_color_brewer(palette="Dark2", name="Mean GI", aesthetics = c("colour","fill"))
+
+p
+
+narrow_si_config = EpiEstim::make_config(
+  method = "parametric_si",
+  mean_si = si2_ganyani$mean_of_mean_si,
+  std_si = si2_ganyani$mean_of_std_si * 0.5,
+  mean_prior = 1,
+  std_prior = 1
+)
+
+narrow_si_R = estimate_R(simple_ts,method = "parametric_si", config=narrow_si_config)
+
+wide_si_config = EpiEstim::make_config(
+  method = "parametric_si",
+  mean_si = si2_ganyani$mean_of_mean_si,
+  std_si = si2_ganyani$mean_of_std_si * 2,
+  mean_prior = 1,
+  std_prior = 1
+)
+
+wide_si_R = estimate_R(simple_ts,method = "parametric_si", config=wide_si_config)
+
+peak_2020 = as.Date(c("2020-11-01","2021-03-01"))
+
+p1 = ggplot()+
+  geom_rt("x75%",low_si_R, dates=peak_2020)+
+  geom_rt(sprintf("%1.2f days",si2_ganyani$mean_of_mean_si),simple_R, dates=peak_2020)+
+  geom_rt("x125%",hi_si_R, dates=peak_2020)+
+  coord_cartesian(ylim=c(0.5,1.75))+
+  scale_color_brewer(palette="Dark2", name="Mean GI", aesthetics = c("colour","fill"))
+
+p2 = ggplot()+
+  geom_rt("x50%",narrow_si_R, dates=peak_2020)+
+  geom_rt(sprintf("%1.2f days",si2_ganyani$mean_of_std_si),simple_R, dates=peak_2020)+
+  geom_rt("x200%",wide_si_R, dates=peak_2020)+
+  coord_cartesian(ylim=c(0.5,1.75))+
+  scale_color_brewer(palette="Set2", name="Std GI", aesthetics = c("colour","fill"))
+
+doplot(p1+theme(axis.title.x = element_blank(),axis.text.x.bottom = element_blank())+p2+patchwork::plot_layout(nrow=2))
+
+```
+
+# Not including start of timeseries
+
+```{r}
+
+trunc_ts = simple_ts %>% filter(dates > as.Date("2020-12-15"))
+trunc_ts_R = estimate_R(trunc_ts,method = "parametric_si", config=simple_config)
+
+p1 = ggplot()+
+  geom_incidence("black",simple_ts$dates, simple_ts$I)+
+  geom_incidence("red",trunc_ts$dates, trunc_ts$I)+
+  coord_cartesian(ylim=c(0,100000), xlim=as.Date(c("2020-12-01","2021-02-01")))+
+  # geom_vline(xintercept=as.Date(c("2020-12-25")), colour="blue")+
+  # geom_vline(xintercept=as.Date(c("2021-01-01")), colour="blue")+
+  # geom_vline(xintercept=as.Date(c("2021-01-04")), colour="red")+
+  scale_x_date(date_breaks = "1 week",date_labels = "%d %b")+
+  theme(axis.text.x.bottom = element_blank())
+
+
+
+p2 = ggplot()+
+  geom_rt("black",simple_R)+
+  geom_rt("red",trunc_ts_R)+
+  coord_cartesian(ylim=c(0.5,3), xlim=as.Date(c("2020-12-01","2021-02-01")))+
+  # geom_vline(xintercept=as.Date(c("2020-12-25")), colour="blue")+
+  # geom_vline(xintercept=as.Date(c("2021-01-01")), colour="blue")+
+  # geom_vline(xintercept=as.Date(c("2021-01-04")), colour="red")+
+  scale_x_date(date_breaks = "1 week",date_labels = "%d %b")
+
+
+doplot(
+  p1+p2+patchwork::plot_layout(ncol = 1)
+)
+```
+
+
+# Censoring at end of timeseries
+
+```{r}
+plot_dates = as.Date(c("2020-07-06","2020-07-20"))
+
+non_cens_ts = simple_ts %>% filter(dates < plot_dates[2])
+cens_ts = non_cens_ts %>% mutate(I = I-I*exp(-as.numeric(plot_dates[2]-dates)))
+
+non_cens_R = estimate_R(non_cens_ts,method = "parametric_si", config=simple_config)
+cens_R = estimate_R(cens_ts,method = "parametric_si", config=simple_config)
+
+p1 = ggplot()+
+  geom_incidence("black",non_cens_ts$dates, non_cens_ts$I)+
+  geom_incidence("red",cens_ts$dates, cens_ts$I)+
+  coord_cartesian(ylim=c(0,1000), xlim=plot_dates)+
+  # geom_vline(xintercept=as.Date(c("2020-12-25")), colour="blue")+
+  # geom_vline(xintercept=as.Date(c("2021-01-01")), colour="blue")+
+  # geom_vline(xintercept=as.Date(c("2021-01-04")), colour="red")+
+  scale_x_date(date_breaks = "1 week",date_labels = "%d %b")+
+  theme(axis.text.x.bottom = element_blank())
+
+
+
+p2 = ggplot()+
+  geom_rt("black",non_cens_R)+
+  geom_rt("red",cens_R)+
+  coord_cartesian(ylim=c(0.75,1.2), xlim=plot_dates)+
+  # geom_vline(xintercept=as.Date(c("2020-12-25")), colour="blue")+
+  # geom_vline(xintercept=as.Date(c("2021-01-01")), colour="blue")+
+  # geom_vline(xintercept=as.Date(c("2021-01-04")), colour="red")+
+  scale_x_date(date_breaks = "1 week",date_labels = "%d %b")
+
+
+doplot(
+  p1+p2+patchwork::plot_layout(ncol = 1)
+)
+```
+
+
+
+# Ascertainment bias
+
+```{r}
+plot_dates = as.Date(c("2020-06-01","2020-07-20"))
+
+ramp_start = as.Date("2020-06-15")
+ramp_end = as.Date("2020-07-06")
+
+asc_ts = simple_ts %>% mutate(
+  I = case_when(
+    dates < ramp_start ~ I*0.4,
+    dates > ramp_end ~ I,
+    TRUE ~ I * (0.4 + 0.6*as.numeric(dates - ramp_start)/as.numeric(ramp_end - ramp_start))
+  ))
+
+asc_R = estimate_R(asc_ts,method = "parametric_si", config=simple_config)
+
+p1 = ggplot()+
+  geom_incidence("black",simple_ts$dates, simple_ts$I)+
+  geom_incidence("red",asc_ts$dates, asc_ts$I)+
+  coord_cartesian(ylim=c(0,2000), xlim=plot_dates)+
+  geom_vline(xintercept=ramp_start, colour="blue")+
+  geom_vline(xintercept=ramp_end, colour="blue")+
+  scale_x_date(date_breaks = "1 week",date_labels = "%d %b")+
+  theme(axis.text.x.bottom = element_blank())
+
+
+
+p2 = ggplot()+
+  geom_rt("black",simple_R)+
+  geom_rt("red",asc_R)+
+  coord_cartesian(ylim=c(0.75,1.5), xlim=plot_dates)+
+  geom_vline(xintercept=ramp_start, colour="blue")+
+  geom_vline(xintercept=ramp_end, colour="blue")+
+  scale_x_date(date_breaks = "1 week",date_labels = "%d %b")
+
+
+doplot(
+  p1+p2+patchwork::plot_layout(ncol = 1)
+)
+```
+
+
+# Prior
+
+```{r}
+ggplot()+geom_gamma(shape=1, rate=1/sqrt(2), colour = "black")
+
+init = 1
+gr1 = 0.001
+gr2 = 0.1
+y = discr_si(1:50, si2_ganyani$mean_of_mean_si, si2_ganyani$mean_of_std_si)
+
+set.seed(101)
+synth_case = tibble(
+  dates = Sys.Date()-100:1,
+  gr = c(rep(gr1,50),rep(gr2,50)),
+  rate_t = exp(cumsum(gr)) * init, 
+  I = rpois(100,rate_t),
+  Rt = wallinga_lipsitch(gr, y)
+)
+
+# low_config = EpiEstim::make_config(
+#   method = "parametric_si",
+#   mean_si = si2_ganyani$mean_of_mean_si,
+#   std_si = si2_ganyani$mean_of_std_si,
+#   mean_prior = sqrt(2),
+#   std_prior = sqrt(2)
+# )
+
+low_config = EpiEstim::make_config(
+  method = "parametric_si",
+  mean_si = si2_ganyani$mean_of_mean_si,
+  std_si = si2_ganyani$mean_of_std_si,
+  mean_prior = 1,
+  std_prior = 0.2
+)
+
+default_config = EpiEstim::make_config(
+  method = "parametric_si",
+  mean_si = si2_ganyani$mean_of_mean_si,
+  std_si = si2_ganyani$mean_of_std_si,
+  mean_prior = 5,
+  std_prior = 5
+)
+
+low_R = estimate_R(synth_case, method = "parametric_si", config=low_config)
+uninf_R = estimate_R(synth_case, method = "parametric_si", config=simple_config)
+default_R = estimate_R(synth_case, method = "parametric_si", config=default_config)
+
+
+
+p1 = ggplot()+
+  geom_incidence("black",synth_case$dates, synth_case$I)+
+  geom_vline(xintercept = Sys.Date()-50, colour="red")
+
+p2 = ggplot()+
+  geom_rt("mean:1; sd:0.2",low_R)+
+  geom_rt("mean:5; sd:5",default_R)+
+  # geom_rt("mean:1; sd:1",uninf_R)+
+  coord_cartesian(ylim=c(0,3))+
+  # geom_vline(xintercept=as.Date(c("2020-12-25")), colour="blue")+
+  # geom_vline(xintercept=as.Date(c("2021-01-01")), colour="blue")+
+  # geom_vline(xintercept=as.Date(c("2021-01-04")), colour="red")+
+  scale_x_date(date_breaks = "1 week",date_labels = "%d %b")+
+  scale_color_brewer(palette="Dark2",aesthetics = c("colour","fill"), name=NULL)+
+  geom_line(data=synth_case, mapping=aes(x=dates,y = Rt),colour="black")+
+  geom_vline(xintercept = Sys.Date()-50, colour="red")
+
+  
+
+
+doplot(
+  p1+p2+patchwork::plot_layout(ncol = 1)
+)
+```
+
+# Windows
+
+```{r}
+
+t_end = 23:nrow(simple_ts)
+
+window_4d_config = EpiEstim::make_config(
+  method = "parametric_si",
+  mean_si = si2_ganyani$mean_of_mean_si,
+  std_si = si2_ganyani$mean_of_std_si,
+  mean_prior = 5,
+  std_prior = 5,
+  t_start = t_end-4,
+  t_end = t_end
+)
+
+window_10d_config = EpiEstim::make_config(
+  method = "parametric_si",
+  mean_si = si2_ganyani$mean_of_mean_si,
+  std_si = si2_ganyani$mean_of_std_si,
+  mean_prior = 5,
+  std_prior = 5,
+  t_start = t_end-10,
+  t_end = t_end
+)
+
+window_14d_config = EpiEstim::make_config(
+  method = "parametric_si",
+  mean_si = si2_ganyani$mean_of_mean_si,
+  std_si = si2_ganyani$mean_of_std_si,
+  mean_prior = 5,
+  std_prior = 5,
+  t_start = t_end-14,
+  t_end = t_end
+)
+
+window_21d_config = EpiEstim::make_config(
+  method = "parametric_si",
+  mean_si = si2_ganyani$mean_of_mean_si,
+  std_si = si2_ganyani$mean_of_std_si,
+  mean_prior = 5,
+  std_prior = 5,
+  t_start = t_end-21,
+  t_end = t_end
+)
+
+window_4d_R = estimate_R(simple_ts, method = "parametric_si", config=window_4d_config)
+window_10d_R = estimate_R(simple_ts, method = "parametric_si", config=window_10d_config)
+window_14d_R = estimate_R(simple_ts, method = "parametric_si", config=window_14d_config)
+window_21d_R = estimate_R(simple_ts, method = "parametric_si", config=window_21d_config)
+
+
+p1 = ggplot()+
+  geom_rt("τ: 7",simple_R)+
+  geom_rt("τ: 4",window_4d_R)+
+  geom_rt("τ: 10",window_10d_R)+
+  coord_cartesian(ylim=c(0.5,1.75), xlim=as.Date(c("2020-12-01","2021-02-01")))+
+  scale_x_date(date_breaks = "1 week",date_labels = "%d %b")+
+  scale_color_manual(name=NULL, values = c("τ: 4"="blue","τ: 7"="black","τ: 10"="red"), aesthetics = c("colour","fill"))
+
+
+p2 = ggplot()+
+  geom_rt("τ: 7",simple_R)+
+  geom_rt("τ: 14",window_14d_R)+
+  geom_rt("τ: 21",window_21d_R)+
+  coord_cartesian(ylim=c(0.5,1.75), xlim=as.Date(c("2020-12-01","2021-02-01")))+
+  scale_x_date(date_breaks = "1 week",date_labels = "%d %b")+
+  scale_color_manual(name=NULL, values = c("τ: 14"="orange","τ: 7"="black","τ: 21"="purple"), aesthetics = c("colour","fill"))
+
+
+doplot(
+  p1+p2+patchwork::plot_layout(ncol = 1)
+)
+
+
+```
+
