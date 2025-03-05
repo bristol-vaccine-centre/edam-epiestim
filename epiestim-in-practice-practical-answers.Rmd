@@ -28,6 +28,10 @@ if (!requireNamespace("EpiEstim")) {
   install.packages("EpiEstim")
 }
 
+if (!requireNamespace("tidyverse")) {
+  install.packages("tidyverse")
+}
+
 # setup libraries
 library(tidyverse)
 library(EpiEstim)
@@ -38,11 +42,16 @@ We are going to use some UK COVID-19 data to estimate the reproduction
 number using infectivity profiles from the literature. We'll use a couple of data
 sets and compare.
 
-## Grab some data
+## Get some data
 
 First of all lets get some retrospective COVID data from the UK coronavirus site.
-The best place to go is to this URL: https://coronavirus.data.gov.uk/details/download, 
-and select `AreaType = Nation`; `AreaName = England`; `Metrics = "newCasesBySpecimenDate"`.
+The API we used during COVID has been decommissioned now so we have bundled a 
+cleaned copy of the data set here:
+
+```
+https://github.com/bristol-vaccine-centre/edam-epiestim/raw/main/input/covid-timeseries.csv
+```
+
 We are going to focus only on the first wave up to 1st Sept 2020:
 
 * Read the link to the CSV file in using `readr::read_csv`. 
@@ -52,12 +61,15 @@ We are going to focus only on the first wave up to 1st Sept 2020:
 
 ```{r}
 
-england_cases = readr::read_csv("https://api.coronavirus.data.gov.uk/v2/data?areaType=nation&areaCode=E92000001&metric=newCasesBySpecimenDate&format=csv") %>% 
+england_cases = readr::read_csv("https://github.com/bristol-vaccine-centre/edam-epiestim/raw/main/input/covid-timeseries.csv") %>% 
   filter(date < "2020-09-01") 
 
 england_cases %>% glimpse()
 
 ```
+
+
+
 We will use cases as a proxy for infections. We can quickly plot a timeline with
 `ggplot`
 
@@ -69,7 +81,7 @@ ggplot(england_cases,aes(x=date,y=newCasesBySpecimenDate))+
 
 
 The epidemic clearly reached a low in late June, early July. Lets see if we can
-get EpiEstim to give us a time.
+get EpiEstim to determine when the epidemic started growing again.
 
 First we need:
 
