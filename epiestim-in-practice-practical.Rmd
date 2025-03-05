@@ -21,14 +21,22 @@ knitr::opts_chunk$set(
   warning = FALSE
 )
 
-# I'm assuming tidyverse is installed.
-
-# install EpiEstim if needed:
+# for reproduction number estimation:
 if (!requireNamespace("EpiEstim")) {
   install.packages("EpiEstim")
 }
 
-# setup libraries
+# for data wrangling and plotting:
+if (!requireNamespace("tidyverse")) {
+  install.packages("tidyverse")
+}
+
+# for plot layout:
+if (!requireNamespace("patchwork")) {
+  install.packages("patchwork")
+}
+
+# setup libraries:
 library(tidyverse)
 library(EpiEstim)
 
@@ -38,11 +46,14 @@ We are going to use some UK COVID-19 data to estimate the reproduction
 number using infectivity profiles from the literature. We'll use a couple of data
 sets and compare.
 
-## Grab some data
+## Get some data
 
 First of all lets get some retrospective COVID data from the UK coronavirus site.
-The best place to go is to this URL: https://coronavirus.data.gov.uk/details/download, 
-and select `AreaType = Nation`; `AreaName = England`; `Metrics = "newCasesBySpecimenDate"`.
+The API we used during COVID has been decommissioned now so we have bundled a 
+cleaned copy of the data set here:
+
+`https://github.com/bristol-vaccine-centre/edam-epiestim/raw/main/input/covid-timeseries.csv`
+
 We are going to focus only on the first wave up to 1st Sept 2020:
 
 * Read the link to the CSV file in using `readr::read_csv`. 
@@ -52,24 +63,23 @@ We are going to focus only on the first wave up to 1st Sept 2020:
 
 ```{r}
 
-# TODO:
-# england_cases = ...?
-# england_cases %>% glimpse()
+england_cases = SOMETHING
 
 ```
 
-We will use cases as a proxy for infections. We can quickly plot a timeline with
-`ggplot`
+We will use cases as a proxy for infections. 
+
+* Plot a timeline of the cases with `ggplot` (e.g. `geom_bar` with `stat=identity`)
 
 ```{r}
-ggplot(england_cases,aes(x=date,y=newCasesBySpecimenDate))+
-  geom_bar(stat="identity")+
-  geom_vline(xintercept = as.Date("2020-07-12"), colour="grey50")
+
+ggplot(england_cases,SOMETHING
+)
 ```
 
 
 The epidemic clearly reached a low in late June, early July. Lets see if we can
-get EpiEstim to give us a time.
+get `EpiEstim` to determine when the epidemic started growing again.
 
 First we need:
 
@@ -80,67 +90,112 @@ First we need:
 
 ## Infectivity profile
 
-We are going to use an estimate from the literature. We will use Ganyani 2020 estimate
-of the generation time from Singapore:
+We are going to use an estimate from the literature. We will use the central
+estimate of the generation interval from the singapore data from Ganyani et al 2020 
+(`https://pmc.ncbi.nlm.nih.gov/articles/PMC7201952/`). They model the generation
+interval as a gamma distributed quantity.
+
+* Find the central estimates of mean and SD of the generation interval 
+distribution from the paper.
 
 ```{r}
 
-tmp = tempfile()
-download.file("https://github.com/bristol-vaccine-centre/edam-epiestim/raw/main/input/serial-interval-literature.xlsx",tmp)
-si_lit = readxl::read_excel(tmp)
-si_ganyani = si_lit %>% filter(estimate_type == "generation interval" & population == "Singapore")
-
-si_ganyani %>% glimpse()
-```
-
-We can get EpiEstim to calculate the discrete infectivity profile distribution using the 
-`EpiEstim::discr_si` function.
-
-* Get a discrete SI distribution.
-* Plot it.
-* Does the mean of the SI distribution equal that of the original ganyani estimate?
-
-$$mean = \sum{ x \times P(x) }$$
-$$std = \sqrt{ \sum{ (x-mean)^2 \times P(x) }}$$
-
-```{r}
-
-# TODO:
+ganyani_mean_gi = SOMETHING
+ganyani_sd_gi = SOMETHING
 
 ```
 
-We don't actually need the SI distribution as EpiEstim does it automatically.
-We select a minimally informative prior for Rₜ and select a window of duration
-7 days. `EpiEstim::make_config` helps you set up a configuration for EpiEstim, 
-and then you can use `EpiEstim::estimate_R`:
+
+We can get EpiEstim to calculate a discrete infectivity profile distribution using the 
+`EpiEstim::discr_si` function. N.B. EpiEstim calls the infectivity profile the
+"serial interval" throughout. We are using an estimate of the generation interval
+instead of a serial interval.
+
+* Get a discrete infectivity profile distribution (for days 1 to 20).
+* Plot it (plus the continuous version using `geom_function` if you are keen).
+* Does the mean of the infectivity profile distribution equal that of the 
+original Ganyani estimate?
+
+$$
+\begin{aligned}
+mean &= \sum{ x \times P(x) }\\
+std &= \sqrt{ \sum{ (x-mean)^2 \times P(x) }}\\
+shape &= \frac{mean^2}{sd^2}\\
+rate &= \frac{mean}{sd^2}
+\end{aligned}
+$$
 
 ```{r}
+si_probability = EpiEstim::discr_si(SOMETHING)
 
+ggplot(SOMETHING)
+
+# Mean and SD of the discretised probability distribution:
+mean_si = ?
+sd_si = ?
+
+
+
+```
+
+
+This is pretty close by N.B. we don't actually need the discrete distribution as
+EpiEstim does this internally when we use the method `"parametric_si"`.
+
+EpiEstim uses a configuration object which you have to create with
+`EpiEstim::make_config`.
+
+* Look at the help page (`?EpiEstim::make_config`), focussing on the 
+`parametric_si` option.
+
+We use a minimally informative prior for Rₜ (i.e. `mean_prior = 1` and
+`std_prior = 1`) and we will use a window of duration 7 days.
+`EpiEstim::make_config` needs this window in terms of a start and end index 
+(beginning at 2... obvs):
+
+```{r}
 window = 7
 t_start = 2:(nrow(england_cases)-window)
 t_end = t_start+window
+```
 
+We now have:
+
+* ✓ Incident cases 
+* ✓ Prior for Rₜ 
+* ✓ Window
+* ✓ Infectivity profile (e.g. Generation time distribution)
+
+Assemble this into a configuration object using `EpiEstim::make_config` and the
+method `parametric_si`:
+
+```{r}
 simple_config = EpiEstim::make_config(
   method = "parametric_si",
-  mean_si = si_ganyani$mean_si_estimate,
-  std_si = si_ganyani$std_si_estimate,
-  mean_prior = 1,
-  std_prior = 1,
-  t_start = t_start,
-  t_end = t_end
+  SOMETHING
 )
+```
 
-simple_ts = england_cases %>% 
-  select(dates = date, I = newCasesBySpecimenDate) %>%
-  arrange(dates)
+Our incident cases are not quite in the right format. It is described in the 
+help file `?EpiEstim::estimate_R`. Basically you need to rename the columns.
 
-epiestim_out = estimate_R(simple_ts,method = "parametric_si", config=simple_config)
+Use the configuration object with the renamed incident case data to get an 
+estimate of Rt:
+
+```{r}
+simple_ts = england_cases # N.B FIX THE TIMESERIES
+
+epiestim_out = EpiEstim::estimate_R(
+  SOMETHING
+)
 
 epiestim_out$R %>% glimpse()
 ```
 
 The output is a list with `R` and `dates` items. You almost always want to combine
-the two. Plotting the timeseries:
+the two. By convention the estimate is assigned to the end of the window, but
+this is a matter of interpretation, as an assumption of the Cori method is 
+that Rt is fixed over the window.
 
 ```{r}
 
@@ -148,25 +203,34 @@ plot_data = epiestim_out$R %>%
   mutate(date = epiestim_out$dates[t_end]) %>% 
   filter(date > "2020-06-01" & date < "2020-08-01")
 
-type = "blue"
+```
 
-ggplot(plot_data)+
-    geom_line(mapping=aes(x=date, y=`Mean(R)`, colour=type))+
-    geom_ribbon(mapping=aes(x=date, ymin=`Quantile.0.25(R)`,ymax=`Quantile.0.75(R)`, fill=type), colour=NA, alpha=0.2)+
-    geom_ribbon(mapping=aes(x=date, ymin=`Quantile.0.025(R)`,ymax=`Quantile.0.975(R)`, fill=type), colour=NA, alpha=0.1)+
-    geom_hline(yintercept = 1, colour="grey50")+
-    geom_vline(xintercept = as.Date("2020-07-12"), colour="grey50")+
-    scale_color_identity(aesthetics=c("fill","colour"))+
-    xlab(NULL)+
-    ylab("Reproduction number")+
-    coord_cartesian(ylim=c(0.75,1.25))
-  
+* Plot the time series of reproduction number estimates (`geom_ribbon` is useful
+for the confidence intervals):
+
+```{r}
+
+ggplot(plot_data, SOMETHING)
 
 ```
 
-* On the 12th July, if they had asked, what would you advise a senior government official who is thinking about
-stimulating the economy with a scheme that involves increasing contacts?
-* What happens if you change the window?
+
+```R
+# N.B. you can get EpiEstim to plot this for you:
+# look at ?EpiEstim::plot.estimate_R
+plot(epiestim_out,
+  what="R",
+  options_R = list(
+    xlim=as.Date(c("2020-06-01", "2020-08-01")),
+    ylim=c(0.75,1.25)
+  )
+)
+```
+
+* On the 12th July, if they had asked, what would you advise a senior government 
+official who is thinking about stimulating the economy with a scheme that 
+involves increasing contacts?
+* What happens if you change the window? Rt prior?
 * When would you have been confident that the epidemic was growing?
 
 ## "Real time" cases
@@ -174,24 +238,30 @@ stimulating the economy with a scheme that involves increasing contacts?
 During the early pandemic there was no government dashboard. Public data was
 extremely limited, and published haphazardly. A community effort to collate the
 data emerged and you can still see the effort made (and frustrations encountered) 
-scraping the data today: https://github.com/tomwhite/covid-19-uk-data/tree/master
+scraping the data today: 
+
+`https://github.com/tomwhite/covid-19-uk-data/tree/master`
 
 The last update to this data was Aug 2020. The data for England is in the `data`
 subdirectory. We can explore what this data looked like at any point in time by 
 looking at the commit history:
 
-https://github.com/tomwhite/covid-19-uk-data/commits/master/data/covid-19-totals-england.csv
+`https://github.com/tomwhite/covid-19-uk-data/commits/master/data/covid-19-totals-england.csv`
 
 Lets look at early July. I'll show you how to get there but the commit for the 
 12th July (a Sunday) can be found here:
 
-https://github.com/tomwhite/covid-19-uk-data/tree/b5e3384a4a6cb6bbf3aa292395ccd90a36771af1
+`https://github.com/tomwhite/covid-19-uk-data/tree/b5e3384a4a6cb6bbf3aa292395ccd90a36771af1`
+
+
 
 ```{r}
 
-tom_white_cases = readr::read_csv("https://github.com/tomwhite/covid-19-uk-data/raw/b5e3384a4a6cb6bbf3aa292395ccd90a36771af1/data/covid-19-totals-england.csv")
+commit_id = "b5e3384a4a6cb6bbf3aa292395ccd90a36771af1"
+tom_white_cases = readr::read_csv(paste0(
+  "https://github.com/tomwhite/covid-19-uk-data/raw/",commit_id,"/data/covid-19-totals-england.csv"
+))
 tom_white_cases %>% glimpse()
-
 ```
 
 As we can see here this was presented as a cumulative case count:
@@ -205,10 +275,9 @@ To get a daily count we can do a diff:
 
 ```{r}
 tom_white_cases = tom_white_cases %>%
-  mutate(dailyConfirmedCases = ConfirmedCases - lag(ConfirmedCases, default = 0))
+  mutate(dailyConfirmedCases = SOMETHING)
 
-ggplot(tom_white_cases,aes(x=Date,y=dailyConfirmedCases))+
-  geom_bar(stat="identity")
+
 ```
 
 There are several issues with this data set that need fixing before we can use 
@@ -228,7 +297,26 @@ Dealing with more "real" data:
 
 ```{r}
 
-# TODO:
+# The data is not conformant
+if (any(is.na(tom_white_cases$dailyConfirmedCases))) 
+  print("missing values found")
+if (any(tom_white_cases$dailyConfirmedCases < 0)) 
+  print("negatives found")
+if (any(na.omit(lead(tom_white_cases$Date)-tom_white_cases$Date != 1))) 
+  print("missing dates")
+
+# To get EpiEstim to work we will have to fill in missing dates and values, and 
+# ensure the case count is strictly positive.
+
+tom_white_cases_fixed = tom_white_cases # DO SOMETHING
+
+
+if (!any(is.na(tom_white_cases_fixed$dailyConfirmedCases))) 
+  print("missing values fixed")
+if (!any(tom_white_cases_fixed$dailyConfirmedCases < 0)) 
+  print("negatives fixed")
+if (!any(na.omit(lead(tom_white_cases_fixed$Date)-tom_white_cases_fixed$Date != 1))) 
+  print("missing dates fixed")
 
 ```
 
@@ -239,11 +327,70 @@ for this data and plot it?
 
 ```{r}
 
-# TODO:
+# OVER TO YOU
 
 ```
+
 
 * Can you explain the differences? Why does it drop off at the end?
 * What would you have advised if this was the data you saw?
 * What do you think about the confidence intervals? Is there a source of 
-uncertainty we are not accounting for.
+uncertainty we are not accounting for?
+* The tom white data for 19th July 2020 is here:
+
+https://github.com/tomwhite/covid-19-uk-data/raw/e890a26b7a2bc2e36e11241d9f584e074d5a2888/data/covid-19-totals-england.csv
+
+* What do you see with the additional 1 weeks data?
+
+
+```{r}
+
+commit_id_2 = "e890a26b7a2bc2e36e11241d9f584e074d5a2888"
+
+tom_white_cases_2 = readr::read_csv(paste0(
+  "https://github.com/tomwhite/covid-19-uk-data/raw/",commit_id_2,"/data/covid-19-totals-england.csv"
+))
+
+# SOMETHING VERY SIMILAR TO WHAT YOU DID BEFORE
+
+```
+
+
+# Further questions
+
+## Official estimates
+
+I've bundled the official SPI-M estimates here:
+
+`https://github.com/bristol-vaccine-centre/edam-epiestim/raw/main/input/covid-consensus-rt.csv`
+
+* How do the EpiEsim estimates compare?
+* Which is more timely?
+
+## Uncertainty
+
+We've talked about uncertainty in infectivity profile and the generation interval
+vs. serial interval debacle.
+
+In the Ganyani paper we saw a central estimate for the mean and sd of the 
+generation time distribution, with 95% credible intervals. In their paper
+they say: "Posterior point estimates are given by the 50% percentiles of the 
+converged MCMC chain. CrIs are given by the 2.5% and 97.5% percentiles of the 
+converged MCMC chain."
+
+EpiEstim can account for uncertainty in the infectivity profile. From the help file:
+"In method "uncertain_si" the mean and sd of the serial interval are each drawn 
+from truncated normal distributions, with parameters specified by the user"
+
+Take a look at the help file for `EpiEstim::make_config` again, looking at the 
+parameters `mean_si`,`std_si`,`std_mean_si`,`min_mean_si`,`max_mean_si`, 
+`std_std_si`, `min_std_si`, `max_std_si` and the method option `uncertain_si`.
+
+* What does Ganyani actually report? 
+* What does EpiEstim actually need?
+* What is missing?
+* If we assumed the posteriors for mean and SD of the generation interval were 
+log-normally distributed could you infer what you need?
+
+
+
