@@ -31,11 +31,6 @@ if (!requireNamespace("tidyverse")) {
   install.packages("tidyverse")
 }
 
-# for plot layout:
-if (!requireNamespace("patchwork")) {
-  install.packages("patchwork")
-}
-
 # setup libraries:
 library(tidyverse)
 library(EpiEstim)
